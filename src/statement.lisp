@@ -17,9 +17,11 @@
                 :from-clause-table-name
                 :join-clause
                 :where-clause
+                :compose-where-clauses
                 :group-by-clause
                 :having-clause
                 :returning-clause
+                :updatability-clause
                 :order-by-clause
                 :limit-clause
                 :offset-clause)
@@ -55,7 +57,8 @@
                        returning-clause
                        order-by-clause
                        limit-clause
-                       offset-clause))
+                       offset-clause
+                       updatability-clause))
       (setf (gethash clause hash) i))
     hash))
 
@@ -84,6 +87,7 @@
                                                                     order-by-clause
                                                                     limit-clause
                                                                     offset-clause
+                                                                    updatability-clause
                                                                   &aux
                                                                     (clause-order
                                                                      (sort-clause-types
@@ -103,7 +107,8 @@
   (returning-clause nil)
   (order-by-clause nil)
   (limit-clause nil)
-  (offset-clause nil))
+  (offset-clause nil)
+  (updatability-clause nil))
 
 @export
 (defun compute-select-statement-children (select-statement)
@@ -118,14 +123,19 @@
                                       returning-clause
                                       order-by-clause
                                       limit-clause
-                                      offset-clause))
+                                      offset-clause
+                                      updatability-clause))
                    (collect (cons type
                                   (or (position type (select-statement-clause-order select-statement)
                                                 :test #'eq)
                                       100))))
                  #'<
                  :key #'cdr))
-    (appending (slot-value select-statement type))))
+    (appending
+     (let ((clauses (slot-value select-statement type)))
+       (if (and (eq type 'where-clause) clauses)
+           (list (compose-where-clauses clauses))
+           clauses)))))
 
 (defmethod yield ((statement select-statement))
   (let ((*inside-select* t))
@@ -208,7 +218,33 @@
   (apply (find-make-statement statement-name #.*package*)
          (remove nil (mapcar #'detect-and-convert args))))
 
-(deftype multiple-allowed-clause () 'join-clause)
+(deftype multiple-allowed-clause () '(or join-clause where-clause))
+
+@export
+(defun merge-statements (statement defaults)
+  (check-type statement select-statement)
+  (check-type defaults select-statement)
+  (apply #'make-statement :select
+         (if defaults
+             (iter (for type in '(fields-clause
+                                  from-clause
+                                  join-clause
+                                  where-clause
+                                  group-by-clause
+                                  having-clause
+                                  returning-clause
+                                  order-by-clause
+                                  limit-clause
+                                  offset-clause))
+               (appending
+                (if (or (null defaults)
+                        (slot-value statement type))
+                    (if (subtypep type 'multiple-allowed-clause)
+                        (append
+                         (slot-value defaults type)
+                         (slot-value statement type))
+                        (slot-value statement type))
+                    (slot-value defaults type)))))))
 
 (defmethod make-statement ((statement-name (eql :select)) &rest args)
   (apply #'make-select-statement

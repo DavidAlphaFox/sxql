@@ -25,6 +25,7 @@
   (:export :yield
            :sql-compile
            :add-child
+           :merge-statements
            :make-statement
            :make-clause
            :make-op
@@ -197,6 +198,13 @@
                      `,expression)))
 
 @export
+(defmacro for (update-type &key of nowait)
+  (let ((ident-list (if (keywordp of)
+                        `(list ,of)
+                        `(quote ,of))))
+    `(make-clause :updatability ,update-type :of ,ident-list :nowait ,nowait)))
+
+@export
 (defun limit (count1 &optional count2)
   (apply #'make-clause :limit `(,count1 ,@(and count2 (list count2)))))
 
@@ -314,6 +322,17 @@
 @export
 (defmacro on-duplicate-key-update (&rest args)
   `(make-clause :on-duplicate-key-update ,@(mapcar #'expand-op args)))
+
+@export
+(defmacro on-conflict-do-nothing (&optional (conflict-target nil))
+  `(make-clause :on-conflict-do-nothing ,conflict-target))
+
+@export
+(defmacro on-conflict-do-update (conflict-target update-set &optional where-condition)
+  `(make-clause :on-conflict-do-update
+                ,conflict-target
+                ,update-set
+                ,where-condition))
 
 
 ;;

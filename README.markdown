@@ -1,4 +1,4 @@
-# SxQL - A SQL generator.
+# SxQL - An SQL generator.
 
 [![Build Status](https://travis-ci.org/fukamachi/sxql.svg?branch=master)](https://travis-ci.org/fukamachi/sxql)
 
@@ -9,16 +9,16 @@
   (from (:as :person :p))
   (where (:and (:>= :age 18)
                (:< :age 65)))
-  (order-by (:desc age)))
-;=> #<SXQL-STATEMENT: SELECT id, name, sex FROM (person AS p) WHERE ((age >= 18) AND (age < 65)) ORDER BY age DESC>
+  (order-by (:desc :age)))
+;=> #<SXQL-STATEMENT: SELECT id, name, sex FROM person AS p WHERE ((age >= 18) AND (age < 65)) ORDER BY age DESC>
 
 (yield *)
 
-;=> "SELECT id, name, sex FROM (person AS p) WHERE ((age >= ?) AND (age < ?)) ORDER BY age DESC"
+;=> "SELECT id, name, sex FROM person AS p WHERE ((age >= ?) AND (age < ?)) ORDER BY age DESC"
 ;   (18 65)
 
 (sql-compile **)
-;=> #<SXQL-COMPILED: SELECT id, name, sex FROM (person AS p) WHERE ((age >= ?) AND (age < ?)) ORDER BY age DESC [18, 65]>
+;=> #<SXQL-COMPILED: SELECT id, name, sex FROM person AS p WHERE ((age >= ?) AND (age < ?)) ORDER BY age DESC [18, 65]>
 
 (union-queries * (select (:id :name :sex) (from '(:as animal a))))
 ;=> #<SXQL-OP: (SELECT id, name, sex FROM (person AS p) WHERE ((age >= ?) AND (age < ?)) ORDER BY age DESC) UNION (SELECT id, name, sex FROM (animal AS a))>
@@ -428,6 +428,42 @@ Support MySQL's `INSERT ... ON DUPLICATE KEY UPDATE` syntax.
 ;=> #<SXQL-STATEMENT: INSERT INTO `person` (`sex`, `age`, `name`) VALUES ('male', 25, 'Eitaro Fukamachi') ON DUPLICATE KEY UPDATE `age` = (`age` + 1)>
 ```
 
+### on-coflict-do-nothing
+
+Support PostgreSQL's `INSERT ... ON CONFLICT DO NOTHING` syntax.
+
+```common-lisp
+(on-conflict-do-nothing)
+;=> #<SXQL-CLAUSE: ON CONFLICT DO NOTHING>
+
+(on-conflict-do-nothing :index_name)
+;=> #<SXQL-CLAUSE: ON CONFLICT ON CONSTRAINT index_name DO NOTHING>
+
+(on-conflict-do-nothing '(:column1 :column2 :column3))
+;=> #<SXQL-CLAUSE: ON CONFLICT (column1, column2, column3) DO NOTHING>
+```
+
+### on-coflict-do-update
+
+Support PostgreSQL's `INSERT ... ON CONFLICT ... DO UPDATE` syntax.
+
+```common-lisp
+(on-conflict-do-update :index_name (set= :x 1 :y 2))
+;=> #<SXQL-CLAUSE: ON CONFLICT ON CONSTRAINT index_name DO UPDATE SET x = 1, y = 2>
+
+(on-conflict-do-update '(:column1 :column2 :column3) (set= :x 1 :y 2))
+;=> #<SXQL-CLAUSE: ON CONFLICT (column1, column2, column3) DO UPDATE SET x = 1, y = 2>
+
+(insert-into :person
+  (set= :sex "male"
+        :age 25
+        :name "Eitaro Fukamachi")
+  (on-conflict-do-update '(:name)
+                         (set= :age (:+ :age 1))
+                         (where (:< :age 99))))
+;=> #<SXQL-STATEMENT: INSERT INTO person (sex, age, name) VALUES ('male', 25, 'Eitaro Fukamachi') ON CONFLICT (name) DO UPDATE SET age = (age + 1) WHERE (age < 99)>
+```
+
 ## SQL Operators
 
 * :not
@@ -443,6 +479,7 @@ Support MySQL's `INSERT ... ON DUPLICATE KEY UPDATE` syntax.
 * :and, :or
 * :+, :-, :* :/ :%
 * :raw
+* :is-distinct-from, :is-not-distinct-from (Postgres)
 
 ## Set a quote character
 

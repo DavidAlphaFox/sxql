@@ -4,10 +4,12 @@
         :annot.class
         :sxql.sql-type
         :sxql.operator
-        :trivial-types)
+        :trivial-types
+        :iterate)
   (:import-from :sxql.sql-type
                 :sql-symbol-name
-                :sql-list-elements)
+                :sql-list-elements
+                :expression-clause-expression)
   (:import-from :sxql.operator
                 :=-op
                 :as-op
@@ -42,6 +44,15 @@
                          (:constructor make-where-clause (expression))))
 
 @export
+(defun compose-where-clauses (clauses)
+  (when clauses
+    (make-where-clause
+     (apply #'make-op
+            :and
+            (iter (for clause in clauses)
+              (collect (expression-clause-expression clause)))))))
+
+@export
 (defstruct (order-by-clause (:include expression-list-clause (name "ORDER BY"))
                             (:constructor make-order-by-clause (&rest expressions))))
 
@@ -68,6 +79,32 @@
 @export
 (defstruct (returning-clause (:include expression-clause (name "RETURNING"))
                           (:constructor make-returning-clause (expression))))
+
+@export
+(defstruct (updatability-clause (:include statement-clause)
+                                (:constructor make-updatability-clause))
+  (update-type :update :type keyword)
+  (idents '() :type list)
+  (nowait nil :type boolean))
+
+(defmethod yield ((obj updatability-clause))
+  (let ((params '()))
+    (values (with-output-to-string (stream)
+              (format stream "FOR ~A"
+                      (ecase (updatability-clause-update-type obj)
+                        (:update "UPDATE")
+                        (:share "SHARE")))
+              ;; Optional "OF <cols/tables>..." list.
+              (when (updatability-clause-idents obj)
+                (format stream " OF ")
+                (multiple-value-bind (str params)
+                    (yield (apply #'make-clause :fields (updatability-clause-idents obj)))
+                  (write-string str stream)
+                  (setf params params)))
+              ;; Optional NOWAIT keyword
+              (when (updatability-clause-nowait obj)
+                (format stream " NOWAIT")))
+            params)))
 
 @export
 (defstruct (join-clause (:include statement-clause)
@@ -320,6 +357,53 @@
       (format nil "ON DUPLICATE KEY UPDATE ~{~A = ~A~^, ~}"
               (mapcar #'yield-arg (on-duplicate-key-update-clause-args clause))))))
 
+(defun make-conflict-target (raw-target)
+  (if (listp raw-target)
+      (apply #'make-sql-list
+             (mapcar #'detect-and-convert raw-target))
+  (detect-and-convert raw-target)))
+
+(defstruct (on-conflict-do-nothing-clause (:include sql-clause (name "ON CONFLICT DO NOTHING"))
+                                          (:constructor make-on-conflict-do-nothing-clause (conflict-target)))
+  (conflict-target nil :type (or sql-list sql-symbol)))
+
+(defmethod yield ((clause on-conflict-do-nothing-clause))
+  (format nil "ON CONFLICT~[ ON CONSTRAINT ~A~; ~A~;~] DO NOTHING"
+          (cond ((eq (type-of (on-conflict-do-nothing-clause-conflict-target clause))
+                     'sql-symbol)
+                 0)
+                ((sql-list-elements (on-conflict-do-nothing-clause-conflict-target clause))
+                 1)
+                (t 2))
+          (yield (on-conflict-do-nothing-clause-conflict-target clause))))
+
+
+(defstruct (on-conflict-do-update-clause (:include sql-clause (name "ON CONFLICT DO UPDATE"))
+                                         (:constructor %make-on-conflict-do-update-clause (conflict-target update-set &optional where-condition)))
+  (conflict-target nil :type (or sql-list sql-symbol))
+  (update-set nil :type set=-clause)
+  (where-condition nil :type (or null where-clause)))
+
+(defun make-on-conflict-do-update-clause (conflict-target update-set &optional where-condition)
+  (when (and (eq (type-of conflict-target) 'sql-list)
+             (null (sql-list-elements conflict-target)))
+    (error "ON-CONFLICT-DO-UPDATE requires inference specification or constraint name. For example, ON CONFLICT (column_name)."))
+  (%make-on-conflict-do-update-clause conflict-target update-set where-condition))
+
+@export
+(defparameter *inside-insert-into* nil)
+
+(defmethod yield ((clause on-conflict-do-update-clause))
+  (let ((*inside-insert-into* nil))
+    (with-yield-binds
+      (format nil "ON CONFLICT ~:[~;ON CONSTRAINT ~]~A DO UPDATE ~A~@[ ~A~]"
+              (eq (type-of (on-conflict-do-update-clause-conflict-target clause))
+                  'sql-symbol)
+              (yield (on-conflict-do-update-clause-conflict-target clause))
+              (yield (on-conflict-do-update-clause-update-set clause))
+              (if (on-conflict-do-update-clause-where-condition clause)
+                  (yield (on-conflict-do-update-clause-where-condition clause)))))))
+
 (defun find-make-clause (clause-name &optional (package *package*))
   (find-constructor clause-name #.(string :-clause)
                     :package package))
@@ -344,6 +428,13 @@
               (list (apply #'make-sql-list
                            (mapcar #'detect-and-convert using)))
               (t (detect-and-convert using))))))
+
+(defmethod make-clause ((clause-name (eql :updatability)) &rest args)
+  (destructuring-bind (update-type &key of nowait) args
+    (make-updatability-clause
+     :update-type update-type
+     :idents (if (not (listp of)) (list of) of)
+     :nowait nowait)))
 
 (defmethod make-clause ((clause-name (eql :key)) &rest args)
   (apply #'make-key-clause-for-all #'make-key-clause args))
@@ -392,6 +483,14 @@
 (defmethod make-clause ((clause-name (eql :add-primary-key)) &rest args)
   (make-add-primary-key-clause (apply #'make-sql-list (mapcar #'detect-and-convert args))))
 
+(defmethod make-clause ((clause-name (eql :on-conflict-do-nothing)) &rest args)
+  (make-on-conflict-do-nothing-clause (make-conflict-target (car args))))
+
+(defmethod make-clause ((clause-name (eql :on-conflict-do-update)) &rest args)
+  (make-on-conflict-do-update-clause (make-conflict-target (car args))
+                                     (cadr args)
+                                     (caddr args)))
+
 (defmethod yield ((clause limit-clause))
   (let ((*use-placeholder* nil))
     (call-next-method)))
@@ -415,9 +514,6 @@
              (if (join-clause-using clause)
                  (yield (join-clause-using clause))
                  nil)))))
-
-@export
-(defparameter *inside-insert-into* nil)
 
 (defmethod yield ((clause set=-clause))
   (labels ((yield-arg (arg)

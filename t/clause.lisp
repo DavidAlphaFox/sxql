@@ -88,6 +88,25 @@
       (make-clause :returning (make-sql-symbol "id"))))
     (list "RETURNING `id`" nil))
 
+(ok (make-clause :updatability :update) "FOR UPDATE")
+(ok (make-clause :updatability :update :of '(:hoge :piyo)) "FOR UPDATE OF")
+(ok (make-clause :updatability :update :of '(:hoge :piyo) :nowait t) "FOR UPDATE OF NOWAIT")
+(is (multiple-value-list
+     (yield (make-clause :updatability :update)))
+    (list "FOR UPDATE" nil))
+(is (multiple-value-list
+     (yield (make-clause :updatability :share)))
+    (list "FOR SHARE" nil))
+(is (multiple-value-list
+     (yield (make-clause :updatability :update :of '(:hoge :fuga.piyo))))
+    (list "FOR UPDATE OF `hoge`, `fuga`.`piyo`" nil))
+(is (multiple-value-list
+     (yield (make-clause :updatability :update :of '(:hoge :piyo) :nowait t)))
+    (list "FOR UPDATE OF `hoge`, `piyo` NOWAIT" nil))
+(is (multiple-value-list
+     (yield (make-clause :updatability :update :nowait t)))
+    (list "FOR UPDATE NOWAIT" nil))
+
 (ok (make-clause :limit (make-sql-variable 1)) "LIMIT")
 (ok (make-clause :limit (make-sql-variable 0) (make-sql-variable 10)))
 (is (multiple-value-list
@@ -242,6 +261,60 @@
       (make-clause :on-duplicate-key-update :a 1 :b 2)))
     '("ON DUPLICATE KEY UPDATE `a` = ?, `b` = ?" (1 2))
     "on-duplicate-key-update")
+
+(is (yield (make-clause :on-conflict-do-nothing))
+    "ON CONFLICT DO NOTHING"
+    "on-conflitct-do-nothing no conflict target")
+
+(is (yield (make-clause :on-conflict-do-nothing '(:x :y)))
+    "ON CONFLICT (`x`, `y`) DO NOTHING"
+    "on-conflitct-do-nothing column set")
+
+(is (yield (make-clause :on-conflict-do-nothing :pkey))
+    "ON CONFLICT ON CONSTRAINT `pkey` DO NOTHING"
+    "on-conflitct-do-nothing index name")
+
+(is (multiple-value-list
+     (yield
+      (make-clause :on-conflict-do-update
+                   '(:x :y)
+                   (make-clause :set= :a 1 :b 2))))
+    '("ON CONFLICT (`x`, `y`) DO UPDATE SET `a` = ?, `b` = ?" (1 2))
+    "on-conflict-do-update column set")
+
+(is (multiple-value-list
+     (yield
+      (make-clause :on-conflict-do-update
+                   :pkey
+                   (make-clause :set= :a 1 :b 2))))
+    '("ON CONFLICT ON CONSTRAINT `pkey` DO UPDATE SET `a` = ?, `b` = ?" (1 2))
+    "on-conflict-do-update column set")
+
+(is-error (make-clause :on-conflict-do-update
+                       nil
+                       (make-clause :set= :a 1 :b 2))
+          error
+          "on-conflict-do-update no conflict target is error")
+
+(is (multiple-value-list
+     (yield
+      (make-clause :on-conflict-do-update
+                   :pkey
+                   (make-clause :set= :a 1 :b 2)
+                   (make-clause :where (make-op := :x :y)))))
+    '("ON CONFLICT ON CONSTRAINT `pkey` DO UPDATE SET `a` = ?, `b` = ? WHERE (`x` = `y`)" (1 2))
+    "on-conflict-do-update with where")
+
+(is (multiple-value-list
+     (yield
+      (sxql.statement:make-statement :insert-into
+                                     :table
+                                     (make-clause :set= :a 1 :b 2)
+                                     (make-clause :on-conflict-do-update
+                                                  :pkey
+                                                  (make-clause :set= :a 1 :b 2)))))
+    '("INSERT INTO `table` (`a`, `b`) VALUES (?, ?) ON CONFLICT ON CONSTRAINT `pkey` DO UPDATE SET `a` = ?, `b` = ?" (1 2 1 2))
+    "on-conflict-do-update inside insert set= correct")
 
 (diag "sql-compile clause")
 

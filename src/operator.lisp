@@ -62,6 +62,8 @@
 (define-op (:in infix-list-op))
 (define-op (:not-in infix-list-op))
 (define-op (:like infix-op))
+(define-op (:is-distinct-from infix-op))
+(define-op (:is-not-distinct-from infix-op))
 
 (define-op (:or conjunctive-op))
 (define-op (:and conjunctive-op))
@@ -77,6 +79,9 @@
                    (:constructor make-raw-op (var)))
   (var nil :type (or string
                     sql-variable)))
+
+(defstruct (splicing-raw-op (:include raw-op)
+                            (:constructor make-splicing-raw-op (var))))
 
 @export
 (defun find-constructor (name suffix &key (package *package*) (errorp t))
@@ -175,6 +180,15 @@ case letters."
 (defmethod yield ((raw raw-op))
   (values
    (format nil "(~A)"
+           (etypecase (raw-op-var raw)
+             (string (raw-op-var raw))
+             (sql-variable (let ((*use-placeholder* nil))
+                             (sql-variable-value (raw-op-var raw))))))
+   nil))
+
+(defmethod yield ((raw splicing-raw-op))
+  (values
+   (format nil "~A"
            (etypecase (raw-op-var raw)
              (string (raw-op-var raw))
              (sql-variable (let ((*use-placeholder* nil))
